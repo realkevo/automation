@@ -14,19 +14,17 @@ INSTALL_PATHS = [
     os.path.expanduser("~/bin"),
 ]
 
-###############################################
+# =========================
 # LOGGING
-###############################################
-
+# =========================
 def log(msg): print(f"[INFO] {msg}")
 def ok(msg): print(f"[OK] {msg}")
 def warn(msg): print(f"[WARN] {msg}")
 def error(msg): print(f"[ERROR] {msg}")
 
-###############################################
+# =========================
 # SAFE RUN
-###############################################
-
+# =========================
 def run(cmd, allow_fail=False):
     log("Running: " + " ".join(cmd))
     try:
@@ -41,10 +39,9 @@ def run(cmd, allow_fail=False):
             error("Command failed")
             sys.exit(1)
 
-###############################################
+# =========================
 # PATH FIX
-###############################################
-
+# =========================
 def ensure_path():
     local_bin = os.path.expanduser("~/.local/bin")
 
@@ -64,10 +61,9 @@ def ensure_path():
     except Exception as e:
         warn(f"PATH update failed: {e}")
 
-###############################################
-# SELF INSTALL (COPY, NOT MOVE)
-###############################################
-
+# =========================
+# SELF INSTALL
+# =========================
 def make_exec(path):
     st = os.stat(path)
     os.chmod(path, st.st_mode | stat.S_IEXEC)
@@ -107,12 +103,11 @@ def install_self():
             warn(f"Failed: {d}")
 
     error("Automatic install failed.")
-    print(f"Manual: mv \"{current}\" ~/.local/bin/{SCRIPT_NAME}")
+    print(f"Manual: mv {current} ~/.local/bin/{SCRIPT_NAME}")
 
-###############################################
-# INSTALL GIT
-###############################################
-
+# =========================
+# GIT INSTALL
+# =========================
 def ensure_git():
     if shutil.which("git"):
         ok("Git found")
@@ -130,68 +125,73 @@ def ensure_git():
         error("Unsupported OS")
         sys.exit(1)
 
-###############################################
-# GIT IDENTITY
-###############################################
-
+# =========================
+# GIT IDENTITY (IDEMPOTENT)
+# =========================
 def ensure_identity():
-    name = subprocess.getoutput("git config --global user.name")
-    email = subprocess.getoutput("git config --global user.email")
+    name = subprocess.getoutput("git config --global user.name").strip()
+    email = subprocess.getoutput("git config --global user.email").strip()
 
     if name and email:
-        ok(f"Identity OK: {name}")
+        ok(f"Identity OK: {name} <{email}>")
         return
 
-    warn("Git identity missing")
+    warn("Git identity missing — configuring...")
 
-    name = input("Enter your name: ")
-    email = input("Enter your GitHub email: ")
+    if not name:
+        name = input("Enter your name: ").strip()
+
+    if not email:
+        email = input("Enter your GitHub email: ").strip()
 
     run(["git", "config", "--global", "user.name", name])
     run(["git", "config", "--global", "user.email", email])
 
     ok("Identity configured")
 
-###############################################
-# SSH SETUP
-###############################################
-
+# =========================
+# SSH SETUP (IDEMPOTENT)
+# =========================
 def ensure_ssh():
     ssh_dir = os.path.expanduser("~/.ssh")
-    key_path = os.path.join(ssh_dir, "id_ed25519")
+    private_key = os.path.join(ssh_dir, "id_ed25519")
+    public_key = private_key + ".pub"
 
-    if os.path.exists(key_path):
-        ok("SSH key exists")
+    # ✅ Skip if already exists
+    if os.path.exists(private_key) and os.path.exists(public_key):
+        ok("SSH already configured — skipping setup")
         return
 
-    warn("No SSH key — generating...")
+    warn("No SSH key found — generating...")
 
     os.makedirs(ssh_dir, exist_ok=True)
 
-    email = subprocess.getoutput("git config --global user.email")
+    email = subprocess.getoutput("git config --global user.email").strip()
 
     run([
         "ssh-keygen",
         "-t", "ed25519",
         "-C", email,
-        "-f", key_path,
+        "-f", private_key,
         "-N", ""
     ])
 
     ok("SSH key created")
 
-    print("\n=== COPY THIS KEY TO GITHUB ===\n")
-    subprocess.run(["cat", key_path + ".pub"])
+    print("\n=== ADD THIS KEY TO GITHUB ===\n")
+    subprocess.run(["cat", public_key])
 
     print("\nGo to: https://github.com/settings/keys")
     input("Press ENTER after adding SSH key...")
 
-###############################################
-# MAIN
-###############################################
+    ok("SSH setup complete")
 
+# =========================
+# MAIN
+# =========================
 def main():
 
+    # SELF INSTALL
     if shutil.which(SCRIPT_NAME) is None:
         if input("Install globally? (y/n): ").lower() == "y":
             install_self()
@@ -204,24 +204,17 @@ def main():
     if input(f"Use current dir ({cwd})? (y/n): ").lower() != "y":
         os.chdir(input("Enter directory: "))
 
-    ###########################################
-    # INIT
-    ###########################################
+    # INIT REPO
     if not os.path.isdir(".git"):
         run(["git", "init"])
 
-    ###########################################
-    # BRANCH
-    ###########################################
     branch = input("Branch (default main): ") or "main"
     run(["git", "checkout", "-B", branch])
 
-    ###########################################
     # REMOTE
-    ###########################################
     print("\n1) Existing URL (HTTPS)")
     print("2) GitHub new repo (HTTPS)")
-    print("3) Use SSH (recommended)")
+    print("3) SSH (recommended)")
 
     choice = input("Choice: ")
 
@@ -241,40 +234,61 @@ def main():
         repo = input("Repo name: ")
         user = input("GitHub username: ")
         remote = f"git@github.com:{user}/{repo}.git"
-
         ensure_ssh()
 
     else:
         error("Invalid choice")
         sys.exit(1)
 
-    ###########################################
     # REMOTE SET
-    ###########################################
     run(["git", "remote", "remove", "origin"], allow_fail=True)
     run(["git", "remote", "add", "origin", remote])
     ok(f"Remote set: {remote}")
 
-    ###########################################
     # ADD + COMMIT
-    ###########################################
     run(["git", "add", "."])
-
     ensure_identity()
 
     msg = input("Commit message: ") or "initial commit"
     run(["git", "commit", "-m", msg])
 
-    ###########################################
     # PUSH
-    ###########################################
-    run(["git", "push", "-u", "origin", branch])
+    try:
+        run(["git", "push", "-u", "origin", branch])
 
-    ok("Push complete.")
+    except SystemExit:
+        print("\n" + "="*50)
+        error("PUSH FAILED — REMOTE REPOSITORY NOT FOUND")
+        print("="*50)
 
-###############################################
+        print("\nWHAT HAPPENED:")
+        print("- The GitHub repository does not exist yet.\n")
+
+        print("FIX STEPS:")
+        print("1. Go to: https://github.com/new")
+        print("2. Create repository with the exact name used above")
+        print("3. DO NOT initialize with README\n")
+
+        print("THEN RUN:")
+        print(f"git push -u origin {branch}\n")
+
+        print("OPTIONAL MANUAL FIX:")
+        print(f"""
+echo "# {repo if 'repo' in locals() else 'project'}" >> README.md
+git init
+git add .
+git commit -m "first commit"
+git branch -M {branch}
+git remote add origin {remote if 'remote' in locals() else 'URL'}
+git push -u origin {branch}
+""")
+
+        sys.exit(1)
+
+    ok("Push complete")
+
+# =========================
 # ENTRY
-###############################################
-
+# =========================
 if __name__ == "__main__":
     main()
