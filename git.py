@@ -126,7 +126,7 @@ def ensure_git():
         sys.exit(1)
 
 # =========================
-# GIT IDENTITY (IDEMPOTENT)
+# GIT IDENTITY (SAFE + IDEMPOTENT)
 # =========================
 def ensure_identity():
     name = subprocess.getoutput("git config --global user.name").strip()
@@ -138,11 +138,8 @@ def ensure_identity():
 
     warn("Git identity missing — configuring...")
 
-    if not name:
-        name = input("Enter your name: ").strip()
-
-    if not email:
-        email = input("Enter your GitHub email: ").strip()
+    name = name or input("Enter your name: ").strip()
+    email = email or input("Enter your GitHub email: ").strip()
 
     run(["git", "config", "--global", "user.name", name])
     run(["git", "config", "--global", "user.email", email])
@@ -150,15 +147,14 @@ def ensure_identity():
     ok("Identity configured")
 
 # =========================
-# SSH SETUP (IDEMPOTENT)
+# SSH SETUP (SAFE SKIP)
 # =========================
 def ensure_ssh():
     ssh_dir = os.path.expanduser("~/.ssh")
-    private_key = os.path.join(ssh_dir, "id_ed25519")
-    public_key = private_key + ".pub"
+    private = os.path.join(ssh_dir, "id_ed25519")
+    public = private + ".pub"
 
-    # ✅ Skip if already exists
-    if os.path.exists(private_key) and os.path.exists(public_key):
+    if os.path.exists(private) and os.path.exists(public):
         ok("SSH already configured — skipping setup")
         return
 
@@ -172,14 +168,14 @@ def ensure_ssh():
         "ssh-keygen",
         "-t", "ed25519",
         "-C", email,
-        "-f", private_key,
+        "-f", private,
         "-N", ""
     ])
 
     ok("SSH key created")
 
-    print("\n=== ADD THIS KEY TO GITHUB ===\n")
-    subprocess.run(["cat", public_key])
+    print("\n=== ADD THIS TO GITHUB ===\n")
+    subprocess.run(["cat", public])
 
     print("\nGo to: https://github.com/settings/keys")
     input("Press ENTER after adding SSH key...")
@@ -204,46 +200,57 @@ def main():
     if input(f"Use current dir ({cwd})? (y/n): ").lower() != "y":
         os.chdir(input("Enter directory: "))
 
-    # INIT REPO
+    # INIT
     if not os.path.isdir(".git"):
         run(["git", "init"])
 
     branch = input("Branch (default main): ") or "main"
     run(["git", "checkout", "-B", branch])
 
-    # REMOTE
-    print("\n1) Existing URL (HTTPS)")
-    print("2) GitHub new repo (HTTPS)")
-    print("3) SSH (recommended)")
+    # =========================
+    # REMOTE HANDLING (FIXED)
+    # =========================
+    print("\n1) Existing URL (HTTPS or SSH)")
+    print("2) Create repo manually (GitHub page)")
+    print("3) Paste repo URL (recommended)")
 
-    choice = input("Choice: ")
+    choice = input("Choice: ").strip()
+
+    remote = ""
 
     if choice == "1":
-        remote = input("Enter repo URL: ")
+        remote = input("Enter repo URL: ").strip()
 
     elif choice == "2":
-        repo = input("Repo name: ")
-        user = input("GitHub username: ")
-        remote = f"https://github.com/{user}/{repo}.git"
+        repo = input("Repo name: ").strip()
+        user = input("GitHub username: ").strip()
 
-        print("\nCreate repo:")
+        print("\n📌 CREATE REPO NOW:")
         print("https://github.com/new")
+        print(f"Repo name must be: {repo}")
+        print("❗ DO NOT add README\n")
+
         input("Press ENTER after creating repo...")
 
+        remote = input("Paste repo URL for verification: ").strip()
+
     elif choice == "3":
-        repo = input("Repo name: ")
-        user = input("GitHub username: ")
-        remote = f"git@github.com:{user}/{repo}.git"
-        ensure_ssh()
+        remote = input("Paste repo URL: ").strip()
 
     else:
         error("Invalid choice")
         sys.exit(1)
 
-    # REMOTE SET
+    # VALIDATION
+    if "github.com" not in remote and "git@" not in remote:
+        error("Invalid remote URL")
+        sys.exit(1)
+
+    ok(f"Remote set: {remote}")
+
+    # SET REMOTE
     run(["git", "remote", "remove", "origin"], allow_fail=True)
     run(["git", "remote", "add", "origin", remote])
-    ok(f"Remote set: {remote}")
 
     # ADD + COMMIT
     run(["git", "add", "."])
@@ -252,38 +259,12 @@ def main():
     msg = input("Commit message: ") or "initial commit"
     run(["git", "commit", "-m", msg])
 
+    # SSH if needed
+    if remote.startswith("git@"):
+        ensure_ssh()
+
     # PUSH
-    try:
-        run(["git", "push", "-u", "origin", branch])
-
-    except SystemExit:
-        print("\n" + "="*50)
-        error("PUSH FAILED — REMOTE REPOSITORY NOT FOUND")
-        print("="*50)
-
-        print("\nWHAT HAPPENED:")
-        print("- The GitHub repository does not exist yet.\n")
-
-        print("FIX STEPS:")
-        print("1. Go to: https://github.com/new")
-        print("2. Create repository with the exact name used above")
-        print("3. DO NOT initialize with README\n")
-
-        print("THEN RUN:")
-        print(f"git push -u origin {branch}\n")
-
-        print("OPTIONAL MANUAL FIX:")
-        print(f"""
-echo "# {repo if 'repo' in locals() else 'project'}" >> README.md
-git init
-git add .
-git commit -m "first commit"
-git branch -M {branch}
-git remote add origin {remote if 'remote' in locals() else 'URL'}
-git push -u origin {branch}
-""")
-
-        sys.exit(1)
+    run(["git", "push", "-u", "origin", branch])
 
     ok("Push complete")
 
